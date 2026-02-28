@@ -1,0 +1,130 @@
+================================================================
+  新機能実装テンプレート（Claude Code Dashboard 用）
+================================================================
+
+【機能名】        {{FEATURE_NAME}}
+【説明】          {{DESCRIPTION}}
+【データソース】  {{DATA_SOURCE_URL}}
+【revalidate】    {{REVALIDATE_SECONDS}} 秒
+【キャッシュタグ】{{CACHE_TAG}}
+
+----------------------------------------------------------------
+STEP 1: 型定義
+  ファイル: src/types/{{type_file}}.ts
+----------------------------------------------------------------
+export interface {{TypeName}} {
+  {{fields}}
+}
+
+----------------------------------------------------------------
+STEP 2: キャッシュ設定の追加
+  ファイル: src/lib/cache.ts
+  ※ CACHE_TAGS と REVALIDATE の両オブジェクトに追記
+----------------------------------------------------------------
+// CACHE_TAGS に追加:
+{{camelName}}: "{{CACHE_TAG}}",
+
+// REVALIDATE に追加:
+{{camelName}}: {{REVALIDATE_SECONDS}},
+
+----------------------------------------------------------------
+STEP 3: フェッチャー関数
+  ファイル: src/lib/fetchers/{{fetcher_file}}.ts
+----------------------------------------------------------------
+import { {{TypeName}} } from "@/types/{{type_file}}";
+import { CACHE_TAGS, REVALIDATE } from "@/lib/cache";
+
+export async function fetch{{FeatureName}}(): Promise<{{TypeName}}[]> {
+  const res = await fetch("{{DATA_SOURCE_URL}}", {
+    next: {
+      revalidate: REVALIDATE.{{camelName}},
+      tags: [CACHE_TAGS.{{camelName}}],
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`{{FEATURE_NAME}} fetch failed: ${res.status}`);
+  }
+
+  const data = await res.json();
+  // TODO: data を {{TypeName}}[] に変換して返す
+  return data;
+}
+
+----------------------------------------------------------------
+STEP 4: カードコンポーネント
+  ファイル: src/components/cards/{{FeatureName}}Card.tsx
+----------------------------------------------------------------
+import { {{TypeName}} } from "@/types/{{type_file}}";
+import { Card } from "@/components/ui/Card";
+import { ExternalLink } from "@/components/ui/ExternalLink";
+import { formatRelativeDate } from "@/lib/utils";
+
+interface {{FeatureName}}CardProps {
+  items: {{TypeName}}[] | null;
+  error?: string;
+}
+
+export function {{FeatureName}}Card({ items, error }: {{FeatureName}}CardProps) {
+  return (
+    <Card
+      title="{{FEATURE_NAME}}"
+      icon={/* TODO: アイコン SVG */}
+      headerRight={
+        <ExternalLink
+          href="{{DATA_SOURCE_URL}}"
+          className="text-xs text-gray-500 dark:text-gray-400"
+        >
+          全て見る →
+        </ExternalLink>
+      }
+    >
+      {error ? (
+        <p className="text-sm text-red-500 dark:text-red-400">{error}</p>
+      ) : !items || items.length === 0 ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">データがありません</p>
+      ) : (
+        <ul className="space-y-3">
+          {items.map((item, i) => (
+            <li key={i} className="flex flex-col gap-1">
+              {/* TODO: 各フィールドの表示 */}
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                {/* {formatRelativeDate(item.createdAt)} */}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+----------------------------------------------------------------
+STEP 5: ページへの統合
+  ファイル: src/app/page.tsx
+----------------------------------------------------------------
+// import 追加:
+import { fetch{{FeatureName}} } from "@/lib/fetchers/{{fetcher_file}}";
+import { {{FeatureName}}Card } from "@/components/cards/{{FeatureName}}Card";
+
+// Promise.allSettled に追加:
+fetch{{FeatureName}}(),
+
+// const [...] = await Promise.allSettled([...]) の分割代入に追加:
+{{camelName}},
+
+// DashboardGrid 内に追加:
+<{{FeatureName}}Card
+  items={ {{camelName}}.status === "fulfilled" ? {{camelName}}.value : null}
+  error={ {{camelName}}.status === "rejected" ? String({{camelName}}.reason) : undefined}
+/>
+
+================================================================
+  実装後チェックリスト
+================================================================
+[ ] 型定義が正確に API レスポンスを表しているか
+[ ] fetch() に next: { revalidate, tags } が付いているか
+[ ] カードの error / empty / data の三分岐が実装されているか
+[ ] dark: バリアントがすべての色クラスに付いているか
+[ ] npm run build でエラーがないか
+================================================================
