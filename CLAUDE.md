@@ -2,77 +2,166 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## 関連ドキュメント
+
+| ファイル | 内容 |
+|----------|------|
+| `README.md` | プロジェクト概要・起動手順（create-next-app デフォルト） |
+| `.env.example` | 環境変数のサンプルと説明 |
+| `src/lib/fetchers/CLAUDE.md` | フェッチャー実装規約 |
+| `src/components/CLAUDE.md` | コンポーネント実装規約 |
+
+---
+
+## コマンド
+
+### 開発
 
 ```bash
-npm run dev      # 開発サーバー起動（http://localhost:3000）
+npm run dev      # 開発サーバー起動（デフォルト http://localhost:3000）
 npm run build    # 本番ビルド（TypeScript 型チェック含む）
-npm run start    # 本番サーバー起動
 npm run lint     # ESLint 実行
 ```
 
-開発サーバーを再起動する際は、既存プロセスとロックファイルを先に削除する：
+### 開発サーバーの再起動
+
+<required>
+既存プロセスとロックファイルを削除してから起動すること。これを省略すると
+`.next/dev/lock` によって起動に失敗する。
+</required>
+
 ```bash
 pkill -f "next dev"
 rm -f .next/dev/lock
+npm run dev
 ```
+
+---
 
 ## 環境変数
 
-`.env.local` に設定する（`.env.example` 参照）：
-- `GITHUB_TOKEN`: GitHub PAT（`read:public_repo` スコープ）。未設定でも動作するが 60 req/h 制限になる。
+設定ファイル: `.env.local`（`.env.example` を参照）
+
+| 変数 | 重要度 | 説明 |
+|------|--------|------|
+| `GITHUB_TOKEN` | <optional>省略可</optional> | GitHub PAT（`read:public_repo`）。未設定時は 60 req/h 制限 |
+
+<forbidden>
+`.env.local` をコミットしないこと。`.gitignore` 対象。
+</forbidden>
+
+---
 
 ## アーキテクチャ
 
+### 全体構成
+
+```
+src/
+├── app/
+│   ├── page.tsx              # ダッシュボード本体（Server Component）
+│   ├── layout.tsx            # ルートレイアウト・メタデータ
+│   ├── globals.css           # Tailwind v4 + ダークモード CSS 変数
+│   └── api/revalidate/       # 手動リフレッシュ API
+├── components/
+│   ├── cards/                # データソースごとのカード（6種）
+│   ├── dashboard/            # グリッド・リフレッシュボタン・更新日時
+│   └── ui/                   # 汎用 UI（Card / Badge / ExternalLink）
+├── lib/
+│   ├── fetchers/             # データ取得ロジック（ソースごとに1ファイル）
+│   ├── cache.ts              # REVALIDATE / CACHE_TAGS の一元管理
+│   ├── translate.ts          # Google Translate 非公式エンドポイント
+│   └── utils.ts              # 日時フォーマット・HTML除去
+└── types/                    # 型定義（github / npm / dashboard）
+```
+
 ### データフロー
 
-`src/app/page.tsx`（Server Component）が全フェッチャーを `Promise.allSettled` で並列実行し、結果（fulfilled/rejected）をそのままカードコンポーネントに props として渡す。いずれかのソースが失敗しても他のカードは表示される。
+<required>
+`src/app/page.tsx` が `Promise.allSettled` で全フェッチャーを並列実行すること。
+`Promise.all` に変更すると1件の失敗で全カードが表示されなくなる。
+</required>
 
 ```
-page.tsx
+page.tsx (Server Component)
   └─ Promise.allSettled([
-       fetchGitHubReleases, fetchNpmInfo, fetchGitHubIssues,  ← lib/fetchers/github.ts, npm.ts
-       fetchAnthropicBlog,                                     ← lib/fetchers/rss.ts
-       fetchTwitterAlt,                                        ← lib/fetchers/twitter-alt.ts
-       fetchJapaneseTech                                       ← lib/fetchers/japanese-tech.ts
+       fetchGitHubReleases()   → src/lib/fetchers/github.ts
+       fetchNpmInfo()          → src/lib/fetchers/npm.ts
+       fetchGitHubIssues()     → src/lib/fetchers/github.ts
+       fetchAnthropicBlog()    → src/lib/fetchers/rss.ts
+       fetchTwitterAlt()       → src/lib/fetchers/twitter-alt.ts
+       fetchJapaneseTech()     → src/lib/fetchers/japanese-tech.ts
      ])
-  └─ 各 *Card コンポーネントへ props を渡す
+  └─ 各 *Card に { data | null, error? } を props として渡す
 ```
 
-### キャッシュ
+### キャッシュ戦略
 
-各 `fetch()` 呼び出しに `next: { revalidate, tags }` を付与することで Next.js の Data Cache を使用。設定値は `src/lib/cache.ts` の `REVALIDATE` / `CACHE_TAGS` に一元管理されている。手動更新は `POST /api/revalidate` が `revalidatePath('/', 'layout')` を呼ぶことで実現。
+<required>
+キャッシュ設定値は `src/lib/cache.ts` の `REVALIDATE` / `CACHE_TAGS` のみで管理すること。
+フェッチャー内にハードコードしない。
+</required>
+
+<forbidden>
+`revalidateTag(tag)` を単独で呼ばないこと。Next.js 16 では第2引数が必須になり型エラーになる。
+手動リフレッシュには `revalidatePath('/', 'layout')` を使用する（`src/app/api/revalidate/route.ts`）。
+</forbidden>
 
 | ソース | revalidate |
 |--------|-----------|
-| GitHub Releases / npm | 3600 秒 |
-| Anthropic Blog / 日本語記事 | 1800 秒 |
-| X / HN（話題） | 600 秒 |
-| GitHub Issues/PR | 300 秒 |
+| GitHub Releases / npm | 3600 秒（1時間） |
+| Anthropic Blog / 日本語記事 | 1800 秒（30分） |
+| X / HN 話題 | 600 秒（10分） |
+| GitHub Issues/PR | 300 秒（5分） |
 
 ### 翻訳
 
-`src/lib/translate.ts` が Google Translate 非公式エンドポイント（`translate.googleapis.com`）を使用。ひらがな・カタカナ・漢字を含むテキストは翻訳をスキップ。失敗時は原文を返す。ブログ記事（`rss.ts`）とツイート（`twitter-alt.ts`）のフェッチ時に適用される。
+`src/lib/translate.ts` が Google Translate 非公式エンドポイント（`translate.googleapis.com/translate_a/single`）を使用。
 
-### X（Twitter）カードのフォールバック
+<required>
+翻訳はフェッチャー内で実行し、キャッシュに乗せること。
+コンポーネント側で翻訳を呼ぶとキャッシュが効かずページ表示のたびに API を叩く。
+</required>
 
-`twitter-alt.ts` は以下の順序で試みる：
-1. Nitter RSS インスタンスを順番に試す（5 秒タイムアウト）
-2. 全インスタンス失敗時 → Hacker News Algolia API（直近 2 週間の Anthropic/Claude 関連記事）
+- ひらがな・カタカナ・漢字（`/[\u3040-\u9FFF]/`）を含む場合は翻訳をスキップ
+- タイムアウト 8 秒・失敗時は原文にフォールバック
+- 現在の適用対象: Anthropic Blog のタイトル・説明文、X/HN のタイトル・本文
 
-カードの表示は `source` フィールド（`"x"` or `"hackernews"`）で切り替わる。
+### X カードのフォールバック構造
 
-### 日本語記事ランキング（`japanese-tech.ts`）
+```
+fetchTwitterAlt()
+  1. Nitter RSS インスタンスを順番に試す（タイムアウト 5 秒/件）
+  2. 全インスタンス失敗 → HN Algolia API（直近 2 週間・Anthropic/Claude）
+```
 
-Qiita・Zenn・note.com を並列取得し、ストック数（Qiita）/ いいね数（note）降順でソートした上位 10 件を返す。
+<optional>
+Nitter インスタンスを追加する場合は `src/lib/fetchers/twitter-alt.ts` の
+`NITTER_INSTANCES` 配列に追加する。
+</optional>
 
-- **Qiita**: `tag:claudecode OR tag:claude-code`、`sort=stock`、直近 3 ヶ月
-- **Zenn**: `https://zenn.dev/topics/claude/feed`（RSS/Atom）、直近 2 週間
-- **note.com**: `/api/v2/searches?context=note&q=claude`（非公式 API）、直近 2 週間
+カードの表示内容は `Tweet.source`（`"x"` | `"hackernews"`）で分岐している。
 
-いいねが 1 件以上の記事のみ表示。該当なしの場合は全件にフォールバック。
+### 日本語記事ランキング（TOP10）
 
-### Next.js バージョン固有の注意点
+`src/lib/fetchers/japanese-tech.ts` が Qiita・Zenn・note.com を並列取得。
 
-- **Next.js 16**（本リポジトリ使用）では `revalidateTag()` の型シグネチャが変更されたため、手動リフレッシュには `revalidatePath('/', 'layout')` を使用している。
-- `tsconfig.json` のパスエイリアス `@/*` は `./src/*` を指す（デフォルトの `./` ではない）。
+| ソース | クエリ | ソート | 期間 |
+|--------|--------|--------|------|
+| Qiita | `tag:claudecode OR tag:claude-code` | `sort=stock`（ストック数） | 3ヶ月 |
+| Zenn | `/topics/claude/feed`（RSS） | 日時順 | 2週間 |
+| note.com | `/api/v2/searches?q=claude`（非公式） | いいね数 | 2週間 |
+
+合算後、ストック/いいね数降順 → 日時降順でソートして上位 10 件。いいね 0 件は除外（該当なし時は全件表示）。
+
+---
+
+## Next.js 16 固有の注意点
+
+<required>
+`tsconfig.json` のパスエイリアス `@/*` は `./src/*` を指す（create-next-app デフォルトの `./` とは異なる）。
+インポートは常に `@/lib/...`、`@/components/...` 形式を使うこと。
+</required>
+
+- `revalidateTag` の代替: 上記「キャッシュ戦略」の forbidden 参照
+- Turbopack がデフォルト有効（`next dev` で自動使用）
